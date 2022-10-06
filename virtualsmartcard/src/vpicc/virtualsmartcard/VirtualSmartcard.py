@@ -452,6 +452,9 @@ class VirtualICC(object):
         elif card_type == "handler_test":
             from virtualsmartcard.cards.HandlerTest import HandlerTestOS
             self.os = HandlerTestOS()
+        elif card_type == "meesign":
+            from virtualsmartcard.cards.meesign import MeesignOS
+            self.os = MeesignOS('localhost:1337')
         else:
             logging.warning("Unknown cardtype %s. Will use standard card_type \
                             (ISO 7816)", card_type)

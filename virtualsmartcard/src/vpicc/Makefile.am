@@ -24,7 +24,10 @@ vpicccards_PYTHON = virtualsmartcard/cards/__init__.py \
            virtualsmartcard/cards/nPA.py \
            virtualsmartcard/cards/Relay.py \
            virtualsmartcard/cards/RelayMiddleman.py \
-           virtualsmartcard/cards/cryptoflex.py
+           virtualsmartcard/cards/cryptoflex.py \
+		   virtualsmartcard/cards/meesign.py \
+		   virtualsmartcard/cards/mpc_pb2.py \
+		   virtualsmartcard/cards/mpc_pb2_grpc.py
 
 do_subst = $(SED) \
 		   -e 's,[@]PYTHON[@],$(PYTHON),g' \
