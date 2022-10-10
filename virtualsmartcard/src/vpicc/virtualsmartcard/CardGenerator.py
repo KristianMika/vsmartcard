@@ -667,6 +667,14 @@ class CardGenerator(object):
                        data=b"\x00\x00\x00\x01\x00\x01\x00\x00"))  # EF.ICCSN
         self.sam = CryptoflexSAM(self.mf)
 
+    def __generate_meesign(self):
+        from virtualsmartcard.cards.meesign import MeesignSAM, MeesignMF
+        self.sam = MeesignSAM()
+        self.mf = MeesignMF()
+        self.sam.set_MF(self.mf)
+
+
+
     def generateCard(self):
         """Generate a new card"""
         if self.type == 'iso7816':
@@ -677,6 +685,8 @@ class CardGenerator(object):
             self.__generate_cryptoflex()
         elif self.type == 'nPA':
             self.__generate_nPA()
+        elif self.type == 'meesign':
+            self.__generate_meesign()
         else:
             return (None, None)
 
