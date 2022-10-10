@@ -2,12 +2,14 @@ from tarfile import DEFAULT_FORMAT
 from xmlrpc.client import Boolean
 import grpc
 from enum import Enum
-from doc.virtualsmartcard.utils import APDU
+from virtualsmartcard.utils import C_APDU
+
 
 from virtualsmartcard.SWutils import SwError, SW
 from virtualsmartcard.VirtualSmartcard import Iso7816OS
 from virtualsmartcard.cards.mpc_pb2 import SignRequest
 from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
+from virtualsmartcard.ConstantDefinitions import MAX_EXTENDED_LE
 
 
 class MeesignOS(Iso7816OS):
@@ -16,15 +18,20 @@ class MeesignOS(Iso7816OS):
     The virtual card provides an interface between a meesign server and a webeid application.
     """
 
-    def __init__(self, _meesign_url):
-        self.atr = b'\x3B\x8A\x80\x01\x80\x31\xF8\x73\xF7\x41\xE0\x82\x90' + \
-                   b'\x00\x75'
+    INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31,
+                             0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
+
+    def __init__(self, mf, sam, _meesign_url, ins2handler=None, maxle=MAX_EXTENDED_LE):
+        # Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
+
+        self.atr = MeesignOS.INFINIT_EID_ATR
         self.meesign_url = _meesign_url
 
-        self.pins = {PinType.ADMIN_PIN_REFERENCE: Pin(),
-                     PinType.AUTH_PIN_REFERENCE: Pin(),
-                     PinType.SING_PIN_REFERENCE: Pin()
-                     }
+        self.pins = {
+            PinType.ADMIN_PIN_REFERENCE: Pin(),
+            PinType.AUTH_PIN_REFERENCE: Pin(),
+            PinType.SING_PIN_REFERENCE: Pin()
+        }
 
     def powerUp(self):
         print("Powering up...")
@@ -34,8 +41,12 @@ class MeesignOS(Iso7816OS):
             apdu = map(ord, msg)
         else:
             apdu = list(msg)
+        # TODO: try .. except..
+        c = C_APDU(msg)
+        return Iso7816OS.formatResult()
+        return SW["NORMAL"], ""
 
-    def create_task(self, apdu:APDU, name: str, group_id: bytes, data: bytes):
+    def create_task(self, apdu: C_APDU, name: str, group_id: bytes, data: bytes):
         """
         Creates a new signing task, blocks, and sends signature back in the response APDU
 
@@ -50,9 +61,9 @@ class MeesignOS(Iso7816OS):
         # TODO: finish
         print("Got response: " + response.message)
 
-    def retries_left(self, apdu: APDU):
+    def retries_left(self, apdu: C_APDU):
         """ Returns the number of verification attempts left for the requested PIN
-        
+
         :param apdu: The request apdu
         """
         if apdu.P1 != 0x00:
@@ -65,10 +76,10 @@ class MeesignOS(Iso7816OS):
 
         # send req_pin.attempts_left() out at the zeroth byte
 
-    def verify_pin(self, apdu: APDU):
+    def verify_pin(self, apdu: C_APDU):
         """
         Verifies the suplied PIN
-        
+
         """
         if apdu.P1 != 0x00:
             raise SwError(SW["ERR_INCORRECTP1P2"])
