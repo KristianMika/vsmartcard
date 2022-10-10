@@ -2,9 +2,10 @@ from tarfile import DEFAULT_FORMAT
 from xmlrpc.client import Boolean
 import grpc
 from enum import Enum
+import struct
+
 from virtualsmartcard.utils import C_APDU
-
-
+from virtualsmartcard.SmartcardSAM import SAM
 from virtualsmartcard.SWutils import SwError, SW
 from virtualsmartcard.VirtualSmartcard import Iso7816OS
 from virtualsmartcard.cards.mpc_pb2 import SignRequest
@@ -21,20 +22,15 @@ class MeesignOS(Iso7816OS):
     INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31,
                              0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
 
-    def __init__(self, mf, sam, _meesign_url, ins2handler=None, maxle=MAX_EXTENDED_LE):
+    def __init__(self, mf, sam, _meesign_url, maxle=MAX_EXTENDED_LE):
         # Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
+        self.ins2handler = {
+            0x20: self.SAM.verify,
+            0x26: self.SAM.retries_left
 
+        }
         self.atr = MeesignOS.INFINIT_EID_ATR
         self.meesign_url = _meesign_url
-
-        self.pins = {
-            PinType.ADMIN_PIN_REFERENCE: Pin(),
-            PinType.AUTH_PIN_REFERENCE: Pin(),
-            PinType.SING_PIN_REFERENCE: Pin()
-        }
-
-    def powerUp(self):
-        print("Powering up...")
 
     def execute(self, msg):
         if isinstance(msg, str):
@@ -44,7 +40,6 @@ class MeesignOS(Iso7816OS):
         # TODO: try .. except..
         c = C_APDU(msg)
         return Iso7816OS.formatResult()
-        return SW["NORMAL"], ""
 
     def create_task(self, apdu: C_APDU, name: str, group_id: bytes, data: bytes):
         """
@@ -61,33 +56,28 @@ class MeesignOS(Iso7816OS):
         # TODO: finish
         print("Got response: " + response.message)
 
-    def retries_left(self, apdu: C_APDU):
-        """ Returns the number of verification attempts left for the requested PIN
 
-        :param apdu: The request apdu
-        """
-        if apdu.P1 != 0x00:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
+class Meesign_SAM(SAM):
+    
+    def __init__(self):
+        self.pins = {
+            PinType.ADMIN_PIN_REFERENCE: Pin(),
+            PinType.AUTH_PIN_REFERENCE: Pin(),
+            PinType.SING_PIN_REFERENCE: Pin()
+        }
 
-        requested_pin_type = apdu.P2
-        req_pin = self.pins.get(requested_pin_type)
-        if req_pin is None:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-        # send req_pin.attempts_left() out at the zeroth byte
-
-    def verify_pin(self, apdu: C_APDU):
+    def verify(self, p1, p2, data):
         """
         Verifies the suplied PIN
-
         """
-        if apdu.P1 != 0x00:
+        if p1 != 0x00:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
-        if apdu.LC != apdu.getIncomingLength() or apdu.LC > Pin.PIN_MAX_SIZE:
-            raise SwError(SW["SW_WRONG_LENGTH"])
+        # TODO: check lengths
+        # if lc != apdu.getIncomingLength() or apdu.LC > Pin.PIN_MAX_SIZE:
+        #    raise SwError(SW["SW_WRONG_LENGTH"])
 
-        requested_pin_type = apdu.P2
+        requested_pin_type = p2
 
         req_pin = self.pins.get(requested_pin_type)
         if req_pin is None:
@@ -96,10 +86,24 @@ class MeesignOS(Iso7816OS):
         if req_pin.attempts_left() == 0:
             raise SwError(SW["SW_PIN_BLOCKED"])
 
-        if req_pin.attempts_left() <= 0:
+        if req_pin.verify_pin(data) == False:
             raise SwError(SW["SW_WRONG_PIN_X_TRIES_LEFT"])
 
-        # return ok
+        return SW["NORMAL"], b""
+
+    def retries_left(self, p1, p2, data):
+        """ 
+        Returns the number of verification attempts left for the requested PIN
+        """
+        if p1 != 0x00:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+        requested_pin_type = p2
+        req_pin = self.pins.get(requested_pin_type)
+        if req_pin is None:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+        return SW["NORMAL"], format_unsigned_short(req_pin.attempts_left())
 
 
 class Pin:
@@ -174,3 +178,7 @@ class PinType(Enum):
     AUTH_PIN_REFERENCE = 0x01
     SING_PIN_REFERENCE = 0x02
     ADMIN_PIN_REFERENCE = 0x03
+
+
+def format_unsigned_short(num):
+    return struct.pack(">H", num)
