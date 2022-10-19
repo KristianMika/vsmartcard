@@ -14,6 +14,11 @@ class MPCStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.GetServerInfo = channel.unary_unary(
+                '/meesign.MPC/GetServerInfo',
+                request_serializer=mpc__pb2.ServerInfoRequest.SerializeToString,
+                response_deserializer=mpc__pb2.ServerInfo.FromString,
+                )
         self.Register = channel.unary_unary(
                 '/meesign.MPC/Register',
                 request_serializer=mpc__pb2.RegistrationRequest.SerializeToString,
@@ -39,6 +44,16 @@ class MPCStub(object):
                 request_serializer=mpc__pb2.TaskUpdate.SerializeToString,
                 response_deserializer=mpc__pb2.Resp.FromString,
                 )
+        self.DecideTask = channel.unary_unary(
+                '/meesign.MPC/DecideTask',
+                request_serializer=mpc__pb2.TaskDecision.SerializeToString,
+                response_deserializer=mpc__pb2.Resp.FromString,
+                )
+        self.AcknowledgeTask = channel.unary_unary(
+                '/meesign.MPC/AcknowledgeTask',
+                request_serializer=mpc__pb2.TaskAcknowledgement.SerializeToString,
+                response_deserializer=mpc__pb2.Resp.FromString,
+                )
         self.GetTasks = channel.unary_unary(
                 '/meesign.MPC/GetTasks',
                 request_serializer=mpc__pb2.TasksRequest.SerializeToString,
@@ -59,10 +74,21 @@ class MPCStub(object):
                 request_serializer=mpc__pb2.LogRequest.SerializeToString,
                 response_deserializer=mpc__pb2.Resp.FromString,
                 )
+        self.SubscribeUpdates = channel.unary_stream(
+                '/meesign.MPC/SubscribeUpdates',
+                request_serializer=mpc__pb2.SubscribeRequest.SerializeToString,
+                response_deserializer=mpc__pb2.Task.FromString,
+                )
 
 
 class MPCServicer(object):
     """Missing associated documentation comment in .proto file."""
+
+    def GetServerInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def Register(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -94,6 +120,18 @@ class MPCServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DecideTask(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AcknowledgeTask(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetTasks(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -118,9 +156,20 @@ class MPCServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SubscribeUpdates(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MPCServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'GetServerInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetServerInfo,
+                    request_deserializer=mpc__pb2.ServerInfoRequest.FromString,
+                    response_serializer=mpc__pb2.ServerInfo.SerializeToString,
+            ),
             'Register': grpc.unary_unary_rpc_method_handler(
                     servicer.Register,
                     request_deserializer=mpc__pb2.RegistrationRequest.FromString,
@@ -146,6 +195,16 @@ def add_MPCServicer_to_server(servicer, server):
                     request_deserializer=mpc__pb2.TaskUpdate.FromString,
                     response_serializer=mpc__pb2.Resp.SerializeToString,
             ),
+            'DecideTask': grpc.unary_unary_rpc_method_handler(
+                    servicer.DecideTask,
+                    request_deserializer=mpc__pb2.TaskDecision.FromString,
+                    response_serializer=mpc__pb2.Resp.SerializeToString,
+            ),
+            'AcknowledgeTask': grpc.unary_unary_rpc_method_handler(
+                    servicer.AcknowledgeTask,
+                    request_deserializer=mpc__pb2.TaskAcknowledgement.FromString,
+                    response_serializer=mpc__pb2.Resp.SerializeToString,
+            ),
             'GetTasks': grpc.unary_unary_rpc_method_handler(
                     servicer.GetTasks,
                     request_deserializer=mpc__pb2.TasksRequest.FromString,
@@ -166,6 +225,11 @@ def add_MPCServicer_to_server(servicer, server):
                     request_deserializer=mpc__pb2.LogRequest.FromString,
                     response_serializer=mpc__pb2.Resp.SerializeToString,
             ),
+            'SubscribeUpdates': grpc.unary_stream_rpc_method_handler(
+                    servicer.SubscribeUpdates,
+                    request_deserializer=mpc__pb2.SubscribeRequest.FromString,
+                    response_serializer=mpc__pb2.Task.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'meesign.MPC', rpc_method_handlers)
@@ -175,6 +239,23 @@ def add_MPCServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class MPC(object):
     """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def GetServerInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/meesign.MPC/GetServerInfo',
+            mpc__pb2.ServerInfoRequest.SerializeToString,
+            mpc__pb2.ServerInfo.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
     def Register(request,
@@ -262,6 +343,40 @@ class MPC(object):
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
+    def DecideTask(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/meesign.MPC/DecideTask',
+            mpc__pb2.TaskDecision.SerializeToString,
+            mpc__pb2.Resp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def AcknowledgeTask(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/meesign.MPC/AcknowledgeTask',
+            mpc__pb2.TaskAcknowledgement.SerializeToString,
+            mpc__pb2.Resp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
     def GetTasks(request,
             target,
             options=(),
@@ -326,5 +441,22 @@ class MPC(object):
         return grpc.experimental.unary_unary(request, target, '/meesign.MPC/Log',
             mpc__pb2.LogRequest.SerializeToString,
             mpc__pb2.Resp.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def SubscribeUpdates(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(request, target, '/meesign.MPC/SubscribeUpdates',
+            mpc__pb2.SubscribeRequest.SerializeToString,
+            mpc__pb2.Task.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
