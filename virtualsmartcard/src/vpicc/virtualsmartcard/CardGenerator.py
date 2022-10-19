@@ -669,10 +669,9 @@ class CardGenerator(object):
 
     def __generate_meesign(self):
         from virtualsmartcard.cards.meesign import MeesignSAM, MeesignMF
-        self.sam = MeesignSAM()
         self.mf = MeesignMF()
+        self.sam = MeesignSAM()
         self.sam.set_MF(self.mf)
-
 
 
     def generateCard(self):

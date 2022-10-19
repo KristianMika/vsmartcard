@@ -1,16 +1,19 @@
-from tarfile import DEFAULT_FORMAT
+from multiprocessing.sharedctypes import Value
 from xmlrpc.client import Boolean
 import grpc
 from enum import Enum
 import struct
+from datetime import datetime
+import time
+from Crypto.PublicKey import ECC
 
 from virtualsmartcard.utils import C_APDU
 from virtualsmartcard.SmartcardFilesystem import MF
 from virtualsmartcard.SEutils import Security_Environment
 from virtualsmartcard.SmartcardSAM import SAM
-from virtualsmartcard.SWutils import SwError, SW
 from virtualsmartcard.VirtualSmartcard import Iso7816OS
-from virtualsmartcard.cards.mpc_pb2 import SignRequest
+from virtualsmartcard.SWutils import SwError, SW
+from virtualsmartcard.cards.mpc_pb2 import SignRequest, TaskRequest, Task
 from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
 from virtualsmartcard.ConstantDefinitions import MAX_EXTENDED_LE
 
@@ -24,8 +27,10 @@ class MeesignOS(Iso7816OS):
     INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31,
                              0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
 
-    def __init__(self, mf, sam, _meesign_url, maxle=MAX_EXTENDED_LE):
-        # Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
+    def __init__(self, mf, sam, _meesign_url, _group_id,  ins2handler=None, maxle=MAX_EXTENDED_LE):
+        if not _group_id:
+            raise ValueError("group_id not specified")
+        Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
         self.ins2handler = {
             0x02: self.SAM.get_public_key,
             0x03: self.SAM.store_certificate,
@@ -33,20 +38,17 @@ class MeesignOS(Iso7816OS):
             0x20: self.SAM.verify,
             0x26: self.SAM.retries_left,
             0x2A: self.SAM.perform_security_operation,
-            0x88: self.SAM.authenticate
+            0x88: self.SAM.authenticate,
+            0xa4: self.mf.selectFile
         }
         self.atr = MeesignOS.INFINIT_EID_ATR
 
         sam.meesign_url = _meesign_url
+        sam.group_id = _group_id
+        sam.auth_pubkey = _group_id
 
     def execute(self, msg):
-        if isinstance(msg, str):
-            apdu = map(ord, msg)
-        else:
-            apdu = list(msg)
-        # TODO: try .. except..
-        c = C_APDU(msg)
-        return Iso7816OS.formatResult()
+        return Iso7816OS.execute(self, msg)
 
 
 class MeesignSE(Security_Environment):
@@ -54,7 +56,15 @@ class MeesignSE(Security_Environment):
 
 
 class MeesignMF(MF):
-    pass
+    AID = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+    def selectFile(self, p1, p2, data):
+        if data == MeesignMF.AID:
+            return SW["NORMAL"], b""
+        else:
+            return SW["ERR_FILENOTFOUND"], b""
+
+
+
 
 
 class MeesignSAM(SAM):
@@ -66,7 +76,7 @@ class MeesignSAM(SAM):
             PinType.AUTH_PIN_REFERENCE: Pin(),
             PinType.SING_PIN_REFERENCE: Pin()
         }
-        self.__create_task("abc", b"123", b"321")
+        
 
     def verify(self, p1, p2, data):
         """
@@ -75,9 +85,8 @@ class MeesignSAM(SAM):
         if p1 != 0x00:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
-        # TODO: check lengths
-        # if lc != apdu.getIncomingLength() or apdu.LC > Pin.PIN_MAX_SIZE:
-        #    raise SwError(SW["SW_WRONG_LENGTH"])
+        if len(data) > Pin.PIN_MAX_SIZE:
+            raise SwError(SW["SW_WRONG_LENGTH"])
 
         requested_pin_type = p2
 
@@ -108,21 +117,19 @@ class MeesignSAM(SAM):
         return SW["NORMAL"], format_unsigned_short(req_pin.attempts_left())
 
     def perform_security_operation(self, p1, p2, data):
+        raise SwError(SW["ERR_NOTSUPPORTED"])
+
         parameters = (p1 << 8) | p2
         if parameters != 0x9E9A:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
-        # task_id = __create_task()
-
-        # wait for task
-        self.pins.get(PinType.SING_PIN_REFERENCE).reset()
-        pass
 
     def get_certificate(self, p1, p2, data):
         if p1 == 0x01:
             return SW["NORMAL"], self.auth_cert
         elif p1 == 0x02:
-            return SW["NORMAL"], self.sign_cert
+            # TODO: implement signing?
+            raise SwError(SW["ERR_NOTSUPPORTED"])
         else:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
@@ -134,23 +141,41 @@ class MeesignSAM(SAM):
             # TODO: data == cert?
             self.auth_cert = data
         elif p1 == 0x02:
-            self.sign_cert = data
+            raise SwError(SW["ERR_NOTSUPPORTED"])
         else:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
         self.pins.get(PinType.ADMIN_PIN_REFERENCE).reset()
-        
+
     def get_public_key(self, p1, p2, data):
-        # TODO: get public key
-        pass
+        key = None
+        if p1 == Reference.AUTH_KEYPAIR_REFERENCE:
+            key = self.auth_pubkey #TODO: store keys in a struct
+        elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE:
+            # TODO: implement signing?
+            raise SwError(SW["ERR_NOTSUPPORTED"])
+        else:
+            # TODO: not in the original applet
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+
+        if p2 != Reference.GET_PUBLIC_KEY_REFERENCE:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+        return SW["NORMAL"], key
+
 
     def authenticate(self, p1, p2, data):
         if not self.pins.get(PinType.AUTH_PIN_REFERENCE).is_validated():
             raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
 
-        # TODO: sign data
-        self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
+        curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
+        task_id = self.__create_task("Nextcloud authentication request from " + curr_datetime, self.group_id, data)
+        task = self.__wait_for_task(task_id)
+        if task is None or task.status == Task.TaskStatus.FAILED:
+            raise SwError(SW["ERR_NOINFO6A"]) #TODO: better error
 
+        self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
+        return SW["NORMAL"], task.data # TODO: task.data?
 
     def __create_task(self, name: str, group_id: bytes, data: bytes):
         """
@@ -161,12 +186,28 @@ class MeesignSAM(SAM):
         :param data: Data containing the signing challenge to be signed    
         """
         # TODO: self.meesign_url fix
+        # TODO: try grpc.secure_channel()
         with grpc.insecure_channel("localhost:1337") as channel:
             stub = MPCStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
-        # TODO: finish
         print("Got response: " + response.message)
+        return response.id
+
+    def __wait_for_task(self, task_id: bytes):
+        MAX_ATTEMPTS = 20
+        ATTEMPT_DELAY_S = 1
+        # TODO: url
+        with grpc.insecure_channel("localhost:1337") as channel:
+            stub = MPCStub(channel)
+            for i in range(MAX_ATTEMPTS):
+                response = stub.GetTask(TaskRequest(task_id=task_id))
+                if response.state not in [Task.TaskState.CREATED, Task.TaskState.RUNNING]:
+                    return response
+                time.sleep(ATTEMPT_DELAY_S)
+        return None
+        
+
 
 
 class Pin:
@@ -189,7 +230,8 @@ class Pin:
     def attempts_left(self) -> int:
         return self.attempts
 
-    def verify_pin(self, pin) -> Boolean:
+    def verify_pin(self, pin) -> bool:
+        return True
         self.attempts_left -= 1
 
         # FIXME: do we care about constant time comparison?
@@ -200,12 +242,11 @@ class Pin:
 
         return result
 
-    def is_validated(self) -> Boolean:
-        pass
+    def is_validated(self) -> bool:
+        return True
 
     def reset():
         pass
-
 
 
 class InstructionType(Enum):
@@ -236,18 +277,22 @@ class InstructionType(Enum):
 
 
 class PinType(Enum):
-    """
-    Holds pin types
-    """
     AUTH_PIN_REFERENCE = 0x01
     SING_PIN_REFERENCE = 0x02
     ADMIN_PIN_REFERENCE = 0x03
 
+class Reference(Enum):
+    AUTH_KEYPAIR_REFERENCE = 0x01
+    SIGNING_KEYPAIR_REFERENCE = 0x02
+    KEYPAIR_GENERATION_REFERENCE = 0x08
+    GET_PUBLIC_KEY_REFERENCE = 0x09
 
 class CustomSW(Enum):
     SW_PIN_VERIFICATION_REQUIRED = 0x6301
-    
 
 
 def format_unsigned_short(num):
+    """
+    Serializes an unsigned short using small endian
+    """
     return struct.pack(">H", num)
