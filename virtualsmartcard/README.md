@@ -1,5 +1,20 @@
 # Virtual Smart Card
 
+## Build and Install
+
+```bash
+autoreconf --verbose --install
+./configure --sysconfdir=/etc
+make
+make install
+```
+
+## Meesign Usage
+```bash
+vicc -t meesign --meesign_url <meesign URL:PORT> --group_id <signing group ID> --meesign_ca_cert </path/to/your/meesign-ca-cert.pem>
+```
+- NOTE: *Feel free to append -v -v -v -v for extra verbose mode*
+
 Virtual Smart Card emulates a smart card and makes it accessible through PC/SC.
 Currently the Virtual Smart Card supports the following types of smart cards:
 
