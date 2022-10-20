@@ -268,7 +268,7 @@ class MeesignSAM(SAM):
             cert = f.read()
 
         credentials = grpc.ssl_channel_credentials(cert)
-        with grpc.secure_channel("meesign.local:1337",credentials) as channel:
+        with grpc.secure_channel(self.meesign_url,credentials) as channel:
             stub = MPCStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
@@ -284,7 +284,7 @@ class MeesignSAM(SAM):
 
         print("waiting... ")
         credentials = grpc.ssl_channel_credentials(cert)
-        with grpc.secure_channel("meesign.local:1337", credentials) as channel:
+        with grpc.secure_channel(self.meesign_url, credentials) as channel:
             stub = MPCStub(channel)
             for _ in range(MAX_ATTEMPTS):
                 print("waiting... ")

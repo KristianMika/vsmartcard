@@ -61,7 +61,7 @@ parser.add_argument("-R", "--reversed",
 parser.add_argument("-U", "--meesign_url",
         action="store",
         type=str,
-        default="localhost:1337",
+        default="meesign.local:1337",
         help="url of the meesign server (default: %(default)s)")
 parser.add_argument("-G", "--group_id",
         action="store",
