@@ -1,11 +1,10 @@
-from multiprocessing.sharedctypes import Value
-import ssl
+import sys
 import grpc
 from enum import Enum
 import struct
 from datetime import datetime
 import time
-from Crypto.PublicKey import ECC
+import logging
 
 from virtualsmartcard.SmartcardFilesystem import MF
 from virtualsmartcard.SEutils import Security_Environment
@@ -26,9 +25,7 @@ class MeesignOS(Iso7816OS):
     INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31,
                              0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
 
-    def __init__(self, mf, sam, _meesign_url, _group_id,  ins2handler=None, maxle=MAX_SHORT_LE):
-        if not _group_id:
-            raise ValueError("group_id not specified")
+    def __init__(self, mf, sam, _meesign_url, _group_id, meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
         Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
         self.ins2handler = {
             0x01: self.SAM.generate_keypair,
@@ -41,17 +38,19 @@ class MeesignOS(Iso7816OS):
             0x2A: self.SAM.perform_security_operation,
             0x88: self.SAM.authenticate,
             0xa4: self.mf.selectFile,
-            0xb0: self.mf.readBinaryPlain, # TODO improve
+            0xb0: self.mf.readBinaryPlain,  # TODO improve
             0xc0: self.getResponse
         }
         self.atr = MeesignOS.INFINIT_EID_ATR
 
         sam.meesign_url = _meesign_url
+        if not _group_id:
+            raise ValueError("group_id not specified")
         group_id = bytes.fromhex(_group_id)
-        sam.group_id =  group_id
+        sam.group_id = group_id
         sam.auth_pubkey = group_id
         mf.auth_cert = []
-
+        sam.set_ssl_credentials(meesign_ca_cert_path)
 
 
 class MeesignSE(Security_Environment):
@@ -61,48 +60,37 @@ class MeesignSE(Security_Environment):
 class MeesignMF(MF):
 
     AID = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
-        
 
     def selectFile(self, p1, p2, data):
         if data == MeesignMF.AID:
             return SW["NORMAL"], b""
         # self.append(TransparentStructureEF(parent=self, fid=FileType.FID_3F00.value,
-                    #    shortfid=0x1c, data=self.auth_cert))
+            #    shortfid=0x1c, data=self.auth_cert))
 
         # return MF.selectFile(self, p1, p2, data)
-
 
         # TODO: use the ducking filesystem implementation
         # if p1 == 0x00:
         self.selected_file = FileType.FID_3F00
         # else:
-            # return SW["ERR_FILENOTFOUND"], b""
-            # self.selected_file = FileType.FID_DDCE #TODO: completely wrong
-
-
+        # return SW["ERR_FILENOTFOUND"], b""
+        # self.selected_file = FileType.FID_DDCE #TODO: completely wrong
 
         return SW["NORMAL"], b""
-        
-
 
     def readBinaryPlain(self, p1, p2, data):
         file = None
-        offset = format_short(bytes([p1, p2]))
-
+        offset = get_short(bytes([p1, p2]))
 
         if self.selected_file == FileType.FID_3F00:
-            file = self.auth_cert[offset:min(offset + 0x80,len(self.auth_cert) )]
+            file = self.auth_cert[offset:min(
+                offset + 0x80, len(self.auth_cert))]
         elif self.selected_file == FileType.FID_DDCE:
             return SW["ERR_FILENOTFOUND"], b""
-            
         else:
-            print("not found file:", self.selected_file)
             return SW["ERR_FILENOTFOUND"], b""
 
         return SW["NORMAL"], file
-
-
-
 
 
 class MeesignSAM(SAM):
@@ -114,7 +102,145 @@ class MeesignSAM(SAM):
             PinType.AUTH_PIN_REFERENCE: Pin(),
             PinType.SING_PIN_REFERENCE: Pin()
         }
-        
+
+    def generate_keypair(self, p1, p2, data):
+        """
+        We are not generating any keys here, just return the success SW
+        """
+        if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
+            # TODO: SW_PIN_VERIFICATION_REQUIRED
+            raise SwError(SW["ERR_SECSTATUS"])
+        return SW["NORMAL"], b""
+
+    def get_public_key(self, p1, p2, data):
+        key = None
+        if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
+            key = self.auth_pubkey  # TODO: store keys in a struct
+        elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE.value:
+            key = self.auth_pubkey  # TODO: wrong
+
+            raise SwError(SW["ERR_NOTSUPPORTED"])
+
+            # key = self.signing_pubkey
+            # TODO: implement signing?
+        else:
+            # TODO: not in the original applet
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+        if p2 != Reference.GET_PUBLIC_KEY_REFERENCE.value:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+        return SW["NORMAL"], key
+
+    def store_certificate(self, p1, p2, data):
+        if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
+            raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
+
+        if p1 == 0x01:
+            assert (self.mf.auth_cert != data)
+            self.mf.auth_cert += data
+
+        elif p1 == 0x02:
+            raise SwError(SW["ERR_NOTSUPPORTED"])
+
+            self.mf.signing_cert += data
+        else:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+        self.pins.get(PinType.ADMIN_PIN_REFERENCE).reset()
+        return SW["NORMAL"], b""
+
+    def get_certificate(self, p1, p2, data):
+        if p1 == 0x01:
+            return SW["NORMAL"], self.mf.auth_cert
+        elif p1 == 0x02:
+            raise SwError(SW["ERR_NOTSUPPORTED"])
+
+            # TODO: implement signing?
+            return SW["NORMAL"], self.mf.signing_cert
+        else:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+    def authenticate(self, p1, p2, data):
+        """
+        Authenticate function is used for login authentication
+        """
+        if not self.pins.get(PinType.AUTH_PIN_REFERENCE).is_validated():
+            raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
+
+        curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
+        task_id = self.__create_task(
+            f"Nextcloud authentication request from {curr_datetime}", self.group_id, data)
+        task = self.__wait_for_task(task_id)
+        if task is None or task.state == Task.TaskState.FAILED:
+            raise SwError(SW["ERR_NOINFO6A"])  # TODO: better error
+
+        self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
+        return SW["NORMAL"], task.data
+
+    def __create_task(self, name: str, group_id: bytes, data: bytes):
+        """
+        Creates a new signing task
+
+        :param name: Name of the task
+        :param group_id: Id of the signing group
+        :param data: Data containing the signing challenge to be signed    
+        """
+        with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
+            stub = MPCStub(channel)
+            response = stub.Sign(SignRequest(
+                name=name, group_id=group_id, data=data))
+        logging.debug(f"Got response: {response}")
+        return response.id
+
+    def __wait_for_task(self, task_id: bytes):
+        """
+        Busy-waits for a task with the specified `task_id` to be finished
+        :param task_id: id of the task to wait for
+        :returns: task if it successfully finished, None otherwise
+        """
+        MAX_ATTEMPTS = 60
+        ATTEMPT_DELAY_S = 1
+
+        with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
+            stub = MPCStub(channel)
+            for _ in range(MAX_ATTEMPTS):
+                logging.debug("Waiting for task...")
+                response = stub.GetTask(TaskRequest(task_id=task_id))
+                if response.state not in [Task.TaskState.CREATED, Task.TaskState.RUNNING]:
+                    return response
+                time.sleep(ATTEMPT_DELAY_S)
+        return None
+
+    def set_ssl_credentials(self, meesign_ca_cert_path):
+        """
+        Reads the cert of meesign CA and instantiates SSL credentials 
+        used for communication with meesign server
+        """
+        if not meesign_ca_cert_path:
+            raise ValueError("Meesign CA certificate path not supplied")
+
+        with open(meesign_ca_cert_path, 'rb') as f:
+            cert = f.read()
+        self.ssl_credentials = grpc.ssl_channel_credentials(cert)
+
+    def manage_security_environment(self, p1, p2, data):
+        """ 
+        Sets the specified pin
+        """
+        if p1 != 0x00:
+            raise SwError(SW["ERR_INCORRECTP1P2"])
+
+        pin = self.__get_pin(p2)
+
+        admin_pin = self.pins.get(PinType.ADMIN_PIN_REFERENCE)
+        if admin_pin.is_set() and not admin_pin.is_validated():
+            raise SwError(SW["ERR_SECSTATUS"])
+        pin.set_pin(data)
+        # pin.resetAndUnblock(); TODO
+        admin_pin.reset()
+        if not admin_pin.is_set() and p2 == PinType.ADMIN_PIN_REFERENCE.value:
+            admin_pin._is_set = True
+        return SW["NORMAL"], b""
 
     def verify(self, p1, p2, data):
         """
@@ -131,7 +257,7 @@ class MeesignSAM(SAM):
         if req_pin.attempts_left() == 0:
             raise SwError(SW["SW_PIN_BLOCKED"])
 
-        if req_pin.verify_pin(data) == False:
+        if not req_pin.verify_pin(data):
             raise SwError(SW["SW_WRONG_PIN_X_TRIES_LEFT"])
 
         return SW["NORMAL"], b""
@@ -147,160 +273,23 @@ class MeesignSAM(SAM):
 
         return SW["NORMAL"], format_unsigned_short(req_pin.attempts_left())
 
-    def perform_security_operation(self, p1, p2, data):
-        raise SwError(SW["ERR_NOTSUPPORTED"])
-
-        parameters = (p1 << 8) | p2
-        if parameters != 0x9E9A:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-
-    def get_certificate(self, p1, p2, data):
-        if p1 == 0x01:
-            return SW["NORMAL"], self.mf.auth_cert
-        elif p1 == 0x02:
-            raise SwError(SW["ERR_NOTSUPPORTED"])
-
-            # TODO: implement signing?
-            return SW["NORMAL"], self.mf.signing_cert
-        else:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-    def store_certificate(self, p1, p2, data):
-        if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
-            raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
-
-        if p1 == 0x01:
-            assert(self.mf.auth_cert != data)
-            self.mf.auth_cert += data
-
-        elif p1 == 0x02:
-            raise SwError(SW["ERR_NOTSUPPORTED"])
-            print("Storing signing cert")
-
-            self.mf.signing_cert += data
-        else:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-        self.pins.get(PinType.ADMIN_PIN_REFERENCE).reset()
-        return SW["NORMAL"], b""
-
-    def get_public_key(self, p1, p2, data):
-        key = None
-        if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
-            key = self.auth_pubkey #TODO: store keys in a struct
-        elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE.value:
-            key = self.auth_pubkey #TODO: wrong
-
-            raise SwError(SW["ERR_NOTSUPPORTED"])
-
-            # key = self.signing_pubkey
-            # TODO: implement signing?
-        else:
-            # TODO: not in the original applet
-            print("weird p1")
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-
-        if p2 != Reference.GET_PUBLIC_KEY_REFERENCE.value:
-            print("p2 not 09")
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-        return SW["NORMAL"], key
-
-    def manage_security_environment(self, p1, p2, data):
-        """ 
-        Set Pin
-        """
-        if p1 != 0x00:
-            raise SwError(SW["ERR_INCORRECTP1P2"])
-
-        pin = self.__get_pin(p2)
-
-        admin_pin = self.pins.get(PinType.ADMIN_PIN_REFERENCE)
-        if admin_pin.is_set() and not admin_pin.is_validated():
-            raise SwError(SW["ERR_SECSTATUS"])
-        pin.set_pin(data)
-        # pin.resetAndUnblock(); TODO
-        admin_pin.reset()
-        if not admin_pin.is_set() and p2 == PinType.ADMIN_PIN_REFERENCE:
-            admin_pin._is_set = True
-        return SW["NORMAL"], b""        
-
-    def generate_keypair(self, p1, p2, data):
-        if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
-            raise SwError(SW["ERR_SECSTATUS"]) # TODO: SW_PIN_VERIFICATION_REQUIRED
-        # missing impl
-        return SW["NORMAL"], b""        
-
-
-
-    def authenticate(self, p1, p2, data):
-        if not self.pins.get(PinType.AUTH_PIN_REFERENCE).is_validated():
-            raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
-
-        curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
-        task_id = self.__create_task("Nextcloud authentication request from " + curr_datetime, self.group_id, data)
-        task = self.__wait_for_task(task_id)
-        if task is None or task.state == Task.TaskState.FAILED:
-            raise SwError(SW["ERR_NOINFO6A"]) #TODO: better error
-
-        self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
-        return SW["NORMAL"], task.data
-
     def __get_pin(self, pin_type: int):
         pintype = PinType(pin_type)
         if not pintype:
             raise SwError(SW["ERR_INCORRECTP1P2"])
         return self.pins.get(pintype)
-        
-    def __create_task(self, name: str, group_id: bytes, data: bytes):
+
+    def perform_security_operation(self, p1, p2, data):
         """
-        Creates a new signing task
-
-        :param name: Name of the task
-        :param group_id: Id of the signing group
-        :param data: Data containing the signing challenge to be signed    
+        We don't currently support signing, only authentication
         """
-        # TODO: self.meesign_url fix
-        # TODO: try grpc.secure_channel()
-
-        with open('/home/kiko/Desktop/meesign-ca-cert.pem', 'rb') as f:
-            cert = f.read()
-
-        credentials = grpc.ssl_channel_credentials(cert)
-        with grpc.secure_channel(self.meesign_url,credentials) as channel:
-            stub = MPCStub(channel)
-            response = stub.Sign(SignRequest(
-                name=name, group_id=group_id, data=data))
-        print("Got response: ", response)
-        return response.id
-
-    def __wait_for_task(self, task_id: bytes):
-        MAX_ATTEMPTS = 60
-        ATTEMPT_DELAY_S = 1
-        # TODO: url meesign.local by default
-        with open('/home/kiko/Desktop/meesign-ca-cert.pem', 'rb') as f:
-            cert = f.read()
-
-        print("waiting... ")
-        credentials = grpc.ssl_channel_credentials(cert)
-        with grpc.secure_channel(self.meesign_url, credentials) as channel:
-            stub = MPCStub(channel)
-            for _ in range(MAX_ATTEMPTS):
-                print("waiting... ")
-                response = stub.GetTask(TaskRequest(task_id=task_id))
-                if response.state not in [Task.TaskState.CREATED, Task.TaskState.RUNNING]:
-                    print(f"Got response: {response}")
-                    return response
-                time.sleep(ATTEMPT_DELAY_S)
-        return None
-        
-
+        raise SwError(SW["ERR_NOTSUPPORTED"])
 
 
 class Pin:
     """
     Represents a PIN instance
+    # TODO: WIP, every verification returns True
     """
 
     PIN_MAX_SIZE = 12
@@ -312,10 +301,10 @@ class Pin:
 
     def set_pin(self, new_pin: bytes):
         self._is_set = True
-        pass
+        self.pin = new_pin
 
     def change_pin(self, new_pin: bytes):
-        pass
+        self.pin = new_pin
 
     def attempts_left(self) -> int:
         return self.attempts
@@ -342,11 +331,11 @@ class Pin:
         return self._is_set
 
 
-
 class PinType(Enum):
     AUTH_PIN_REFERENCE = 0x01
     SING_PIN_REFERENCE = 0x02
     ADMIN_PIN_REFERENCE = 0x03
+
 
 class Reference(Enum):
     AUTH_KEYPAIR_REFERENCE = 0x01
@@ -354,8 +343,15 @@ class Reference(Enum):
     KEYPAIR_GENERATION_REFERENCE = 0x08
     GET_PUBLIC_KEY_REFERENCE = 0x09
 
+
 class CustomSW(Enum):
     SW_PIN_VERIFICATION_REQUIRED = 0x6301
+
+
+class FileType(Enum):
+    FID_3F00 = 0x3F00
+    FID_AACE = 0xAACE
+    FID_DDCE = 0xDDCE
 
 
 def format_unsigned_short(num):
@@ -364,10 +360,9 @@ def format_unsigned_short(num):
     """
     return struct.pack(">H", num)
 
-def format_short(nums):
-    return struct.unpack(">H", nums)[0]
 
-class FileType(Enum):
-    FID_3F00 = 0x3F00
-    FID_AACE = 0xAACE
-    FID_DDCE = 0xDDCE
+def get_short(nums):
+    """
+    Returns a small-endian short decoded from bytes
+    """
+    return struct.unpack(">H", nums)[0]
