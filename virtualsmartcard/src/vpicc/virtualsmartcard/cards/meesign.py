@@ -1,4 +1,5 @@
 from multiprocessing.sharedctypes import Value
+import ssl
 import grpc
 from enum import Enum
 import struct
@@ -191,7 +192,7 @@ class MeesignSAM(SAM):
         elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE.value:
             key = self.auth_pubkey #TODO: wrong
 
-            # raise SwError(SW["ERR_NOTSUPPORTED"])
+            raise SwError(SW["ERR_NOTSUPPORTED"])
 
             # key = self.signing_pubkey
             # TODO: implement signing?
@@ -240,11 +241,11 @@ class MeesignSAM(SAM):
         curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
         task_id = self.__create_task("Nextcloud authentication request from " + curr_datetime, self.group_id, data)
         task = self.__wait_for_task(task_id)
-        if task is None or task.status == Task.TaskStatus.FAILED:
+        if task is None or task.state == Task.TaskState.FAILED:
             raise SwError(SW["ERR_NOINFO6A"]) #TODO: better error
 
         self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
-        return SW["NORMAL"], task.data # TODO: task.data?
+        return SW["NORMAL"], task.data
 
     def __get_pin(self, pin_type: int):
         pintype = PinType(pin_type)
@@ -262,22 +263,34 @@ class MeesignSAM(SAM):
         """
         # TODO: self.meesign_url fix
         # TODO: try grpc.secure_channel()
-        with grpc.insecure_channel("localhost:1337") as channel:
+
+        with open('/home/kiko/Desktop/meesign-ca-cert.pem', 'rb') as f:
+            cert = f.read()
+
+        credentials = grpc.ssl_channel_credentials(cert)
+        with grpc.secure_channel("meesign.local:1337",credentials) as channel:
             stub = MPCStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
-        print("Got response: " + response.message)
+        print("Got response: ", response)
         return response.id
 
     def __wait_for_task(self, task_id: bytes):
-        MAX_ATTEMPTS = 20
+        MAX_ATTEMPTS = 60
         ATTEMPT_DELAY_S = 1
-        # TODO: url
-        with grpc.insecure_channel("localhost:1337") as channel:
+        # TODO: url meesign.local by default
+        with open('/home/kiko/Desktop/meesign-ca-cert.pem', 'rb') as f:
+            cert = f.read()
+
+        print("waiting... ")
+        credentials = grpc.ssl_channel_credentials(cert)
+        with grpc.secure_channel("meesign.local:1337", credentials) as channel:
             stub = MPCStub(channel)
-            for i in range(MAX_ATTEMPTS):
+            for _ in range(MAX_ATTEMPTS):
+                print("waiting... ")
                 response = stub.GetTask(TaskRequest(task_id=task_id))
                 if response.state not in [Task.TaskState.CREATED, Task.TaskState.RUNNING]:
+                    print(f"Got response: {response}")
                     return response
                 time.sleep(ATTEMPT_DELAY_S)
         return None
