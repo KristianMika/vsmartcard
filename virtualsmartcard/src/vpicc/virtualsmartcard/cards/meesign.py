@@ -1,4 +1,5 @@
-import sys
+from __future__ import annotations  # Enable return class annotations
+from typing import Optional, Tuple, Type
 import grpc
 from enum import Enum
 import struct
@@ -15,6 +16,8 @@ from virtualsmartcard.cards.mpc_pb2 import SignRequest, TaskRequest, Task
 from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
 from virtualsmartcard.ConstantDefinitions import MAX_SHORT_LE
 
+ApduResponse: Type = Tuple[int, bytes]
+
 
 class MeesignOS(Iso7816OS):
     """
@@ -22,10 +25,12 @@ class MeesignOS(Iso7816OS):
     The virtual card provides an interface between a meesign server and a webeid application.
     """
 
-    INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31,
-                             0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
+    INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe,
+                            0x45, 0x80, 0x31, 0x80, 0x66, 0x40, 0x90, 0xa5,
+                            0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
 
-    def __init__(self, mf, sam, _meesign_url, _group_id, meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
+    def __init__(self, mf, sam, _meesign_url, _group_id,
+                 meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
         Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
         self.ins2handler = {
             0x01: self.SAM.generate_keypair,
@@ -61,13 +66,13 @@ class MeesignMF(MF):
 
     AID = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
 
-    def selectFile(self, p1, p2, data):
+    def selectFile(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         if data == MeesignMF.AID:
             return SW["NORMAL"], b""
         # self.append(TransparentStructureEF(parent=self, fid=FileType.FID_3F00.value,
             #    shortfid=0x1c, data=self.auth_cert))
 
-        # return MF.selectFile(self, p1, p2, data)
+        # return MF.selectFile(self, p1:int, p2:int, data:bytes)
 
         # TODO: use the ducking filesystem implementation
         # if p1 == 0x00:
@@ -78,7 +83,7 @@ class MeesignMF(MF):
 
         return SW["NORMAL"], b""
 
-    def readBinaryPlain(self, p1, p2, data):
+    def readBinaryPlain(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         file = None
         offset = get_short(bytes([p1, p2]))
 
@@ -103,7 +108,7 @@ class MeesignSAM(SAM):
             PinType.SING_PIN_REFERENCE: Pin()
         }
 
-    def generate_keypair(self, p1, p2, data):
+    def generate_keypair(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         """
         We are not generating any keys here, just return the success SW
         """
@@ -112,7 +117,7 @@ class MeesignSAM(SAM):
             raise SwError(SW["ERR_SECSTATUS"])
         return SW["NORMAL"], b""
 
-    def get_public_key(self, p1, p2, data):
+    def get_public_key(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         key = None
         if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
             key = self.auth_pubkey  # TODO: store keys in a struct
@@ -131,7 +136,7 @@ class MeesignSAM(SAM):
             raise SwError(SW["ERR_INCORRECTP1P2"])
         return SW["NORMAL"], key
 
-    def store_certificate(self, p1, p2, data):
+    def store_certificate(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
             raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
 
@@ -149,7 +154,7 @@ class MeesignSAM(SAM):
         self.pins.get(PinType.ADMIN_PIN_REFERENCE).reset()
         return SW["NORMAL"], b""
 
-    def get_certificate(self, p1, p2, data):
+    def get_certificate(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         if p1 == 0x01:
             return SW["NORMAL"], self.mf.auth_cert
         elif p1 == 0x02:
@@ -160,7 +165,7 @@ class MeesignSAM(SAM):
         else:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
-    def authenticate(self, p1, p2, data):
+    def authenticate(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         """
         Authenticate function is used for login authentication
         """
@@ -169,7 +174,9 @@ class MeesignSAM(SAM):
 
         curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
         task_id = self.__create_task(
-            f"Nextcloud authentication request from {curr_datetime}", self.group_id, data)
+            f"Nextcloud authentication request from {curr_datetime}",
+            self.group_id,
+            data)
         task = self.__wait_for_task(task_id)
         if task is None or task.state == Task.TaskState.FAILED:
             raise SwError(SW["ERR_NOINFO6A"])  # TODO: better error
@@ -177,22 +184,23 @@ class MeesignSAM(SAM):
         self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
         return SW["NORMAL"], task.data
 
-    def __create_task(self, name: str, group_id: bytes, data: bytes):
+    def __create_task(self, name: str, group_id: bytes, data: bytes) -> bytes:
         """
         Creates a new signing task
 
         :param name: Name of the task
         :param group_id: Id of the signing group
-        :param data: Data containing the signing challenge to be signed    
+        :param data: Data containing the signing challenge to be signed
+        :returns: ID of the created task
         """
         with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
             stub = MPCStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
-        logging.debug(f"Got response: {response}")
+        logging.debug(f"Task id: {response.id.hex()}")
         return response.id
 
-    def __wait_for_task(self, task_id: bytes):
+    def __wait_for_task(self, task_id: bytes) -> Optional[Task]:
         """
         Busy-waits for a task with the specified `task_id` to be finished
         :param task_id: id of the task to wait for
@@ -206,14 +214,15 @@ class MeesignSAM(SAM):
             for _ in range(MAX_ATTEMPTS):
                 logging.debug("Waiting for task...")
                 response = stub.GetTask(TaskRequest(task_id=task_id))
-                if response.state not in [Task.TaskState.CREATED, Task.TaskState.RUNNING]:
+                if response.state not in [
+                        Task.TaskState.CREATED, Task.TaskState.RUNNING]:
                     return response
                 time.sleep(ATTEMPT_DELAY_S)
         return None
 
     def set_ssl_credentials(self, meesign_ca_cert_path):
         """
-        Reads the cert of meesign CA and instantiates SSL credentials 
+        Reads the cert of meesign CA and instantiates SSL credentials
         used for communication with meesign server
         """
         if not meesign_ca_cert_path:
@@ -223,8 +232,9 @@ class MeesignSAM(SAM):
             cert = f.read()
         self.ssl_credentials = grpc.ssl_channel_credentials(cert)
 
-    def manage_security_environment(self, p1, p2, data):
-        """ 
+    def manage_security_environment(
+            self, p1: int, p2: int, data: bytes) -> ApduResponse:
+        """
         Sets the specified pin
         """
         if p1 != 0x00:
@@ -242,7 +252,7 @@ class MeesignSAM(SAM):
             admin_pin._is_set = True
         return SW["NORMAL"], b""
 
-    def verify(self, p1, p2, data):
+    def verify(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         """
         Verifies the suplied PIN
         """
@@ -262,8 +272,8 @@ class MeesignSAM(SAM):
 
         return SW["NORMAL"], b""
 
-    def retries_left(self, p1, p2, data):
-        """ 
+    def retries_left(self, p1: int, p2: int, data: bytes) -> ApduResponse:
+        """
         Returns the number of verification attempts left for the requested PIN
         """
         if p1 != 0x00:
@@ -273,13 +283,14 @@ class MeesignSAM(SAM):
 
         return SW["NORMAL"], format_unsigned_short(req_pin.attempts_left())
 
-    def __get_pin(self, pin_type: int):
+    def __get_pin(self, pin_type: int) -> Pin:
         pintype = PinType(pin_type)
         if not pintype:
             raise SwError(SW["ERR_INCORRECTP1P2"])
         return self.pins.get(pintype)
 
-    def perform_security_operation(self, p1, p2, data):
+    def perform_security_operation(
+            self, p1: int, p2: int, data: bytes) -> ApduResponse:
         """
         We don't currently support signing, only authentication
         """
@@ -327,7 +338,7 @@ class Pin:
     def reset(self):
         pass
 
-    def is_set(self):
+    def is_set(self) -> bool:
         return self._is_set
 
 
