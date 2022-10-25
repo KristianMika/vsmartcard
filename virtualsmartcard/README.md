@@ -8,12 +8,36 @@ autoreconf --verbose --install
 make
 make install
 ```
-
 ## Meesign Usage
+*NOTE:* You may need to restart pcscd before running vicc
+  ```bash
+  sudo systemctl restart pcscd 
+  ```
+
 ```bash
 vicc -t meesign --meesign_url <meesign URL:PORT> --group_id <signing group ID> --meesign_ca_cert </path/to/your/meesign-ca-cert.pem>
 ```
 - NOTE: *Feel free to append -v -v -v -v for extra verbose mode*
+
+## Initialize the card
+
+```bash
+git clone https://github.com/KristianMika/InfinitEID.git
+cd InfinitEID/src/InfinitEID-card-management 
+# install requirements using README.md
+python3 cli
+```
+Press 3x "enter"
+
+wait a few secs
+
+Press "q"
+
+Now you are ready to go. Keep in mind PCSCD sets a 60s suicide timer after every APDU. When the timer runs out,
+it kills the context, in our case, vicc aborts. (Will solve this issue later)
+
+
+
 
 Virtual Smart Card emulates a smart card and makes it accessible through PC/SC.
 Currently the Virtual Smart Card supports the following types of smart cards:
