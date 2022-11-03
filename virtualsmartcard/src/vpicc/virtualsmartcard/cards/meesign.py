@@ -226,7 +226,7 @@ class MeesignSAM(SAM):
         :param task_id: id of the task to wait for
         :returns: task if it successfully finished, None otherwise
         """
-        MAX_ATTEMPTS = 60
+        MAX_ATTEMPTS = 3 * 60
         ATTEMPT_DELAY_S = 1
 
         with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
