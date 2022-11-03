@@ -5,7 +5,10 @@ from enum import Enum
 import struct
 from datetime import datetime
 import time
+from threading import Thread, Event
 import logging
+from smartcard.System import readers
+
 
 from virtualsmartcard.SmartcardFilesystem import MF
 from virtualsmartcard.SEutils import Security_Environment
@@ -25,7 +28,22 @@ class MeesignOS(Iso7816OS):
     The virtual card provides an interface between a meesign server and a webeid application.
     """
 
-    INFINIT_EID_ATR = bytes([0x3b, 0xd5, 0x18, 0xff, 0x81, 0x91, 0xfe, 0x1f, 0xc3, 0x80, 0x73, 0xc8, 0x21, 0x10, 0x0a])
+    INFINIT_EID_ATR = bytes([0x3b,
+                             0xd5,
+                             0x18,
+                             0xff,
+                             0x81,
+                             0x91,
+                             0xfe,
+                             0x1f,
+                             0xc3,
+                             0x80,
+                             0x73,
+                             0xc8,
+                             0x21,
+                             0x10,
+                             0x0a])
+    SELF_PING_TIMER_SECONDS = 30
 
     def __init__(self, mf, sam, _meesign_url, _group_id,
                  meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
@@ -54,6 +72,11 @@ class MeesignOS(Iso7816OS):
         sam.auth_pubkey = group_id
         mf.auth_cert = []
         sam.set_ssl_credentials(meesign_ca_cert_path)
+
+        self_ping = RepeatingTimer(
+            MeesignOS.SELF_PING_TIMER_SECONDS, pingThisCard)
+        # comment the line bellow to disable self-ping
+        self_ping.start()
 
 
 class MeesignSE(Security_Environment):
@@ -278,7 +301,8 @@ class MeesignSAM(SAM):
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
         req_pin = self.__get_pin(p2)
-        return SW["NORMAL"], bytes([0x03, 0x03]) #TODO: for whatever reason the lower solution does not work
+        # TODO: for whatever reason the lower solution does not work
+        return SW["NORMAL"], bytes([0x03, 0x03])
 
         return SW["NORMAL"], format_unsigned_short(req_pin.attempts_left())
 
@@ -377,3 +401,27 @@ def get_short(nums):
     Returns a small-endian short decoded from bytes
     """
     return struct.unpack(">H", nums)[0]
+
+
+class RepeatingTimer(Thread):
+    def __init__(self, interval_seconds, callback):
+        super().__init__()
+        self.stop_event = Event()
+        self.interval_seconds = interval_seconds
+        self.callback = callback
+
+    def run(self):
+        while not self.stop_event.wait(self.interval_seconds):
+            self.callback()
+
+    def stop(self):
+        self.stop_event.set()
+
+
+def pingThisCard():
+    logging.info(f"About to self-ping...")
+    reader = readers()[0]
+    conn = reader.createConnection()
+    conn.connect()
+    response, sw1, sw2 = conn.transmit(
+        [0x00, 0xA4, 0x04, 0x00, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
