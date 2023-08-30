@@ -1,5 +1,5 @@
 from __future__ import annotations  # Enable return class annotations
-from typing import Optional, Tuple, Type
+from typing import Optional, Tuple, Type, Callable
 import grpc
 from enum import Enum
 import struct
@@ -8,6 +8,9 @@ import time
 from threading import Thread, Event
 import logging
 from smartcard.System import readers
+import os
+import requests
+from dataclasses import dataclass
 
 
 from virtualsmartcard.SmartcardFilesystem import MF
@@ -20,7 +23,7 @@ from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
 from virtualsmartcard.ConstantDefinitions import MAX_SHORT_LE
 
 ApduResponse: Type = Tuple[int, bytes]
-
+CONTROLLER_PORT=12345
 
 class MeesignOS(Iso7816OS):
     """
@@ -45,7 +48,7 @@ class MeesignOS(Iso7816OS):
                              0x0a])
     SELF_PING_TIMER_SECONDS = 30
 
-    def __init__(self, mf, sam, _meesign_url, _group_id,
+    def __init__(self, mf, sam, meesign_url, group_id,
                  meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
         Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
         self.ins2handler = {
@@ -64,14 +67,18 @@ class MeesignOS(Iso7816OS):
         }
         self.atr = MeesignOS.INFINIT_EID_ATR
 
-        sam.meesign_url = _meesign_url
-        if not _group_id:
+        
+        group_id = bytes.fromhex(group_id)
+        if not group_id:
             raise ValueError("group_id not specified")
-        group_id = bytes.fromhex(_group_id)
-        sam.group_id = group_id
-        sam.auth_pubkey = group_id
         mf.auth_cert = []
         sam.set_ssl_credentials(meesign_ca_cert_path)
+
+        self.configuration_provider = RootConfigurationProvider(
+            ControllerConfigurationProvider(CONTROLLER_PORT),
+            CliArgumentConfigurationProvider(meesign_url, group_id, meesign_ca_cert_path),
+            EnvConfigurationProvider(),
+        )
 
         self_ping = RepeatingTimer(
             MeesignOS.SELF_PING_TIMER_SECONDS, pingThisCard)
@@ -139,10 +146,15 @@ class MeesignSAM(SAM):
 
     def get_public_key(self, p1: int, p2: int, data: bytes) -> ApduResponse:
         key = None
+        configuration = self.configuration_provider.get_configuration()
+        if not configuration:
+            # todo
+            pass
+
         if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
-            key = self.auth_pubkey  # TODO: store keys in a struct
+            key = configuration.group_id  # TODO: store keys in a struct
         elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE.value:
-            key = self.auth_pubkey  # TODO: wrong
+            key = configuration.group_id  # TODO: wrong
 
             raise SwError(SW["ERR_NOTSUPPORTED"])
 
@@ -193,18 +205,24 @@ class MeesignSAM(SAM):
             raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
 
         curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
+        configuration = self.configuration_provider.get_configuration()
+        self.set_ssl_credentials(configuration.communicator_certificate_path)
+        if not configuration:
+            # TODO
+            pass
         task_id = self.__create_task(
             f"Nextcloud authentication request from {curr_datetime}",
-            self.group_id,
-            data)
-        task = self.__wait_for_task(task_id)
+            configuration.group_id,
+            data,
+            configuration.communicator_url)
+        task = self.__wait_for_task(task_id, configuration.communicator_url)
         if task is None or task.state == Task.TaskState.FAILED:
             raise SwError(SW["ERR_NOINFO6A"])  # TODO: better error
 
         self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
         return SW["NORMAL"], task.data
 
-    def __create_task(self, name: str, group_id: bytes, data: bytes) -> bytes:
+    def __create_task(self, name: str, group_id: bytes, data: bytes, communicator_url: str) -> bytes:
         """
         Creates a new signing task
 
@@ -213,14 +231,14 @@ class MeesignSAM(SAM):
         :param data: Data containing the signing challenge to be signed
         :returns: ID of the created task
         """
-        with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
+        with grpc.secure_channel(communicator_url, self.ssl_credentials) as channel:
             stub = MPCStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
         logging.debug(f"Task id: {response.id.hex()}")
         return response.id
 
-    def __wait_for_task(self, task_id: bytes) -> Optional[Task]:
+    def __wait_for_task(self, task_id: bytes, communicator_url: str) -> Optional[Task]:
         """
         Busy-waits for a task with the specified `task_id` to be finished
         :param task_id: id of the task to wait for
@@ -229,7 +247,7 @@ class MeesignSAM(SAM):
         MAX_ATTEMPTS = 3 * 60
         ATTEMPT_DELAY_S = 1
 
-        with grpc.secure_channel(self.meesign_url, self.ssl_credentials) as channel:
+        with grpc.secure_channel(communicator_url, self.ssl_credentials) as channel:
             stub = MPCStub(channel)
             for _ in range(MAX_ATTEMPTS):
                 logging.debug("Waiting for task...")
@@ -425,3 +443,110 @@ def pingThisCard():
     conn.connect()
     response, sw1, sw2 = conn.transmit(
         [0x00, 0xA4, 0x04, 0x00, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+
+@dataclass
+class InterfaceConfiguration:
+    communicator_url: str
+    group_id: bytes
+    communicator_certificate_path: str
+
+
+class ConfigurationProvider:
+    def get_configuration(self) -> Optional[InterfaceConfiguration]:
+        return self.configuration
+
+    def is_usable(self) -> bool:
+        return self.configuration is not None
+
+
+class EnvConfigurationProvider(ConfigurationProvider):
+    def __init__(self) -> None:
+        self.configuration = None
+        communicator_url = self.__get_conmmunicator_url()
+        group_id = self.__get_group_id()
+        communicator_certificate_path = self.__get_communicator_certificate_path()
+        if None not in [communicator_url, group_id, communicator_certificate_path]:
+            self.configuration = InterfaceConfiguration(
+                communicator_url, group_id, communicator_certificate_path
+            )
+
+    def __get_conmmunicator_url(self) -> Optional[str]:
+        return os.environ.get("COMMUNICATOR_URL")
+
+    def __get_group_id(self) -> Optional[bytes]:
+        group_id = os.environ.get("GROUP_ID")
+        if group_id is None:
+            return None
+        try:
+            group_id = bytes.fromhex(group_id)
+        except ValueError as error:
+            # TODO: tell the user
+            raise
+        return group_id
+
+    def __get_communicator_certificate_path(self) -> Optional[str]:
+        return os.environ.get("COMMUNICATOR_CERTIFICATE_PATH")
+
+
+class CliArgumentConfigurationProvider(ConfigurationProvider):
+    def __init__(
+        self,
+        communicator_url: Optional[str],
+        group_id: Optional[bytes],
+        communicator_certificate_path: Optional[str],
+    ):
+        self.configuration = None
+        if None not in [communicator_url, group_id, communicator_certificate_path]:
+            self.configuration = InterfaceConfiguration(
+                communicator_url, group_id, communicator_certificate_path
+            )
+
+
+class ControllerConfigurationProvider(ConfigurationProvider):
+    def __init__(self, controller_port: int) -> None:
+        self.controller_port = str(controller_port)
+
+    def is_usable(self) -> bool:
+        # we can launch the server at any time
+        return True
+
+    def get_configuration(self) -> Optional[InterfaceConfiguration]:
+        url = f"http://localhost:{self.controller_port}/pcsc/configuration"
+        try:
+            response = requests.get(url)
+        except requests.RequestException as error:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        try:
+            configuration = InterfaceConfiguration(**data)
+        except TypeError as error:
+            # got invalid data
+            return None
+        return configuration
+
+
+class RootConfigurationProvider(ConfigurationProvider):
+    def __init__(self, *configuration_providers: ConfigurationProvider) -> None:
+        """
+        :configuration_providers: configuration providers in descending order of precedence
+        """
+        is_provider_usable: Callable[
+            [ConfigurationProvider], bool
+        ] = lambda provider: provider.is_usable()
+        self.configuration_providers = list(
+            filter(is_provider_usable, configuration_providers)
+        )
+
+    def is_usable(self) -> bool:
+        return len(self.configuration_providers) >= 1
+
+    def get_configuration(self) -> Optional[InterfaceConfiguration]:
+        for provider in self.configuration_providers:
+            configuration = provider.get_configuration()
+            if configuration:
+                return configuration
+
