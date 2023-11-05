@@ -413,7 +413,7 @@ class VirtualICC(object):
                  readernum=None, mitmPath=None, ef_cardsecurity=None, ef_cardaccess=None,
                  ca_key=None, cvca=None, disable_checks=False, esign_key=None,
                  esign_ca_cert=None, esign_cert=None,
-                 logginglevel=logging.INFO, meesign_url=None, group_id=None,
+                 logginglevel=logging.INFO, meesign_hostname=None, group_id=None,
                  meesign_ca_cert_path=None):
         from os.path import exists
 
@@ -455,7 +455,7 @@ class VirtualICC(object):
             self.os = HandlerTestOS()
         elif card_type == "meesign":
             from virtualsmartcard.cards.meesign import MeesignOS
-            self.os = MeesignOS(MF, SAM, meesign_url, group_id, meesign_ca_cert_path)
+            self.os = MeesignOS(MF, SAM, meesign_hostname, group_id, meesign_ca_cert_path)
         else:
             logging.warning("Unknown cardtype %s. Will use standard card_type \
                             (ISO 7816)", card_type)

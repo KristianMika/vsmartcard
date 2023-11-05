@@ -58,11 +58,10 @@ parser.add_argument("-P", "--port",
 parser.add_argument("-R", "--reversed",
         action="store_true",
         help="use reversed connection mode. vicc will wait for an incoming connection from vpcd. (default: %(default)s)")
-parser.add_argument("-U", "--meesign_url",
+parser.add_argument("-M", "--meesign_hostname",
         action="store",
         type=str,
-        default="meesign.local:1337",
-        help="url of the meesign server (default: %(default)s)")
+        help="hostname of the meesign server")
 parser.add_argument("-G", "--group_id",
         action="store",
         type=str,
@@ -173,7 +172,7 @@ vicc = VirtualICC(args.datasetfile, args.type, hostname, args.port,
         readernum=args.reader, mitmPath=args.mitm, ef_cardaccess=ef_cardaccess_data,
         ef_cardsecurity=ef_cardsecurity_data, ca_key=ca_key_data, cvca=cvca,
         disable_checks=args.disable_ta_checks, esign_ca_cert=esign_ca_cert,
-        esign_cert=esign_cert, logginglevel=logginglevel, meesign_url=args.meesign_url,
+        esign_cert=esign_cert, logginglevel=logginglevel, meesign_hostname=args.meesign_hostname,
         group_id=args.group_id, meesign_ca_cert_path=args.meesign_ca_cert)
 try:
     vicc.run()

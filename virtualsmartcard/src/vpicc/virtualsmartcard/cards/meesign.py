@@ -23,7 +23,8 @@ from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
 from virtualsmartcard.ConstantDefinitions import MAX_SHORT_LE
 
 ApduResponse: Type = Tuple[int, bytes]
-CONTROLLER_PORT=12345
+CONTROLLER_PORT=11115
+MEESIGN_PORT=1337
 
 class MeesignOS(Iso7816OS):
     """
@@ -48,7 +49,7 @@ class MeesignOS(Iso7816OS):
                              0x0a])
     SELF_PING_TIMER_SECONDS = 30
 
-    def __init__(self, mf, sam, meesign_url, group_id,
+    def __init__(self, mf, sam, meesign_hostname, group_id,
                  meesign_ca_cert_path, ins2handler=None, maxle=MAX_SHORT_LE):
         Iso7816OS.__init__(self, mf, sam, ins2handler, maxle)
         self.ins2handler = {
@@ -75,14 +76,14 @@ class MeesignOS(Iso7816OS):
         sam.set_ssl_credentials(meesign_ca_cert_path)
 
         self.configuration_provider = RootConfigurationProvider(
-            ControllerConfigurationProvider(CONTROLLER_PORT),
-            CliArgumentConfigurationProvider(meesign_url, group_id, meesign_ca_cert_path),
+            CliArgumentConfigurationProvider(meesign_hostname, group_id, meesign_ca_cert_path),
             EnvConfigurationProvider(),
+            ControllerConfigurationProvider(CONTROLLER_PORT),
         )
 
         self_ping = RepeatingTimer(
             MeesignOS.SELF_PING_TIMER_SECONDS, pingThisCard)
-        # comment the line bellow to disable self-ping
+        
         self_ping.start()
 
 
@@ -210,12 +211,13 @@ class MeesignSAM(SAM):
         if not configuration:
             # TODO
             pass
+        communicator_url = f"{configuration.communicator_hostname}:{MEESIGN_PORT}"
         task_id = self.__create_task(
             f"Nextcloud authentication request from {curr_datetime}",
             configuration.group_id,
             data,
-            configuration.communicator_url)
-        task = self.__wait_for_task(task_id, configuration.communicator_url)
+            communicator_url)
+        task = self.__wait_for_task(task_id, communicator_url)
         if task is None or task.state == Task.TaskState.FAILED:
             raise SwError(SW["ERR_NOINFO6A"])  # TODO: better error
 
@@ -446,7 +448,7 @@ def pingThisCard():
 
 @dataclass
 class InterfaceConfiguration:
-    communicator_url: str
+    communicator_hostname: str
     group_id: bytes
     communicator_certificate_path: str
 
@@ -462,16 +464,26 @@ class ConfigurationProvider:
 class EnvConfigurationProvider(ConfigurationProvider):
     def __init__(self) -> None:
         self.configuration = None
-        communicator_url = self.__get_conmmunicator_url()
+        communicator_hostname = self.__get_conmmunicator_hostname()
         group_id = self.__get_group_id()
         communicator_certificate_path = self.__get_communicator_certificate_path()
-        if None not in [communicator_url, group_id, communicator_certificate_path]:
-            self.configuration = InterfaceConfiguration(
-                communicator_url, group_id, communicator_certificate_path
+        conf_values = [communicator_hostname, group_id, communicator_certificate_path]
+        are_all_values_unspecified = all([value is None for value in conf_values])
+
+        if are_all_values_unspecified:
+            return
+        are_all_values_specified = all([value is not None for value in conf_values])
+        if not are_all_values_specified:
+            raise ValueError(
+                "Either all of the following environment variables must be specified or none of them: COMMUNICATOR_HOSTNAME, GROUP_ID, COMMUNICATOR_CERTIFICATE_PATH"
             )
 
-    def __get_conmmunicator_url(self) -> Optional[str]:
-        return os.environ.get("COMMUNICATOR_URL")
+        self.configuration = InterfaceConfiguration(
+            communicator_hostname, group_id, communicator_certificate_path
+        )
+
+    def __get_conmmunicator_hostname(self) -> Optional[str]:
+        return os.environ.get("COMMUNICATOR_HOSTNAME")
 
     def __get_group_id(self) -> Optional[bytes]:
         group_id = os.environ.get("GROUP_ID")
@@ -491,15 +503,25 @@ class EnvConfigurationProvider(ConfigurationProvider):
 class CliArgumentConfigurationProvider(ConfigurationProvider):
     def __init__(
         self,
-        communicator_url: Optional[str],
+        communicator_hostname: Optional[str],
         group_id: Optional[bytes],
         communicator_certificate_path: Optional[str],
     ):
         self.configuration = None
-        if None not in [communicator_url, group_id, communicator_certificate_path]:
-            self.configuration = InterfaceConfiguration(
-                communicator_url, group_id, communicator_certificate_path
+        conf_values = [communicator_hostname, group_id, communicator_certificate_path]
+        are_all_values_unspecified = all([value is None for value in conf_values])
+
+        if are_all_values_unspecified:
+            return
+        
+        are_all_values_specified = all([value is not None for value in conf_values])
+        if not are_all_values_specified:
+            raise ValueError(
+                "Either all of the following variables must be specified or none of them: hostname, group id, communicator certificate path"
             )
+        self.configuration = InterfaceConfiguration(
+            communicator_hostname, group_id, communicator_certificate_path
+        )
 
 
 class ControllerConfigurationProvider(ConfigurationProvider):
@@ -511,7 +533,7 @@ class ControllerConfigurationProvider(ConfigurationProvider):
         return True
 
     def get_configuration(self) -> Optional[InterfaceConfiguration]:
-        url = f"http://localhost:{self.controller_port}/pcsc/configuration"
+        url = f"http://localhost:{self.controller_port}/pcsc/configuration?tool=web-eid"
         try:
             response = requests.get(url)
         except requests.RequestException as error:
