@@ -68,12 +68,7 @@ class MeesignOS(Iso7816OS):
         }
         self.atr = MeesignOS.INFINIT_EID_ATR
 
-        
-        group_id = bytes.fromhex(group_id)
-        if not group_id:
-            raise ValueError("group_id not specified")
         mf.auth_cert = []
-        sam.set_ssl_credentials(meesign_ca_cert_path)
 
         self.configuration_provider = RootConfigurationProvider(
             CliArgumentConfigurationProvider(meesign_hostname, group_id, meesign_ca_cert_path),
@@ -81,6 +76,8 @@ class MeesignOS(Iso7816OS):
             ControllerConfigurationProvider(CONTROLLER_PORT),
         )
 
+        meesign_ca_cert_path = self.configuration_provider.get_configuration().communicator_certificate_path
+        sam.set_ssl_credentials(meesign_ca_cert_path)
         self_ping = RepeatingTimer(
             MeesignOS.SELF_PING_TIMER_SECONDS, pingThisCard)
         
@@ -504,10 +501,11 @@ class CliArgumentConfigurationProvider(ConfigurationProvider):
     def __init__(
         self,
         communicator_hostname: Optional[str],
-        group_id: Optional[bytes],
+        group_id: Optional[str],
         communicator_certificate_path: Optional[str],
     ):
         self.configuration = None
+        group_id = bytes.fromhex(group_id) if group_id is not None else None
         conf_values = [communicator_hostname, group_id, communicator_certificate_path]
         are_all_values_unspecified = all([value is None for value in conf_values])
 
