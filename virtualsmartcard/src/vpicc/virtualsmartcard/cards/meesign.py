@@ -1,4 +1,4 @@
-from __future__ import annotations  # Enable return class annotations
+from __future__ import annotations  # To enable return class type annotations
 from typing import Optional, Tuple, Type, Callable
 import grpc
 from enum import Enum
@@ -32,21 +32,9 @@ class MeesignOS(Iso7816OS):
     The virtual card provides an interface between a meesign server and a webeid application.
     """
 
-    INFINIT_EID_ATR = bytes([0x3b,
-                             0xd5,
-                             0x18,
-                             0xff,
-                             0x81,
-                             0x91,
-                             0xfe,
-                             0x1f,
-                             0xc3,
-                             0x80,
-                             0x73,
-                             0xc8,
-                             0x21,
-                             0x10,
-                             0x0a])
+    # INFINIT_EID_ATR = bytes([0x3b, 0xd5, 0x18, 0xff, 0x81, 0x91, 0xfe, 0x1f, 0xc3, 0x80, 0x73, 0xc8, 0x21, 0x10, 0x0a])
+    INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31, 0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
+                             
     SELF_PING_TIMER_SECONDS = 30
 
     def __init__(self, mf, sam, meesign_hostname, group_id,
@@ -63,7 +51,7 @@ class MeesignOS(Iso7816OS):
             0x2A: self.SAM.perform_security_operation,
             0x88: self.SAM.authenticate,
             0xa4: self.mf.selectFile,
-            0xb0: self.mf.readBinaryPlain,  # TODO improve
+            0xb0: self.mf.readBinaryPlain,
             0xc0: self.getResponse
         }
         self.atr = MeesignOS.INFINIT_EID_ATR
@@ -78,6 +66,12 @@ class MeesignOS(Iso7816OS):
 
         meesign_ca_cert_path = self.configuration_provider.get_configuration().communicator_certificate_path
         sam.set_ssl_credentials(meesign_ca_cert_path)
+        sam.set_configuration_provider(self.configuration_provider)
+        # pcscd, in the default configuration with the --auto-exit option, commits a suicide
+        # if no APDU is sent within a period of 60s. As we don't want to enforce
+        # a custom configuration of pcscd to the user, we simply ping the card
+        # every 30 seconds to keep pcscd running while of meesign card is being used 
+        # https://github.com/LudovicRousseau/PCSC/blob/pcsc-1.9.0/ChangeLog#L550
         self_ping = RepeatingTimer(
             MeesignOS.SELF_PING_TIMER_SECONDS, pingThisCard)
         
@@ -93,23 +87,13 @@ class MeesignMF(MF):
     AID = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
 
     def selectFile(self, p1: int, p2: int, data: bytes) -> ApduResponse:
-        if data == MeesignMF.AID:
-            return SW["NORMAL"], b""
-        # self.append(TransparentStructureEF(parent=self, fid=FileType.FID_3F00.value,
-            #    shortfid=0x1c, data=self.auth_cert))
-
-        # return MF.selectFile(self, p1:int, p2:int, data:bytes)
-
-        # TODO: use the ducking filesystem implementation
-        # if p1 == 0x00:
-        self.selected_file = FileType.FID_3F00
-        # else:
-        # return SW["ERR_FILENOTFOUND"], b""
-        # self.selected_file = FileType.FID_DDCE #TODO: completely wrong
-
+        if data != MeesignMF.AID:
+            self.selected_file = FileType.FID_3F00  
         return SW["NORMAL"], b""
 
     def readBinaryPlain(self, p1: int, p2: int, data: bytes) -> ApduResponse:
+        # TODO: this could be refactored to use the filesystem implementation
+        # present in vpicc
         file = None
         offset = get_short(bytes([p1, p2]))
 
@@ -138,7 +122,6 @@ class MeesignSAM(SAM):
         We are not generating any keys here, just return the success SW
         """
         if not self.pins.get(PinType.ADMIN_PIN_REFERENCE).is_validated():
-            # TODO: SW_PIN_VERIFICATION_REQUIRED
             raise SwError(SW["ERR_SECSTATUS"])
         return SW["NORMAL"], b""
 
@@ -150,16 +133,10 @@ class MeesignSAM(SAM):
             pass
 
         if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
-            key = configuration.group_id  # TODO: store keys in a struct
+            key = configuration.group_id  
         elif p1 == Reference.SIGNING_KEYPAIR_REFERENCE.value:
-            key = configuration.group_id  # TODO: wrong
-
             raise SwError(SW["ERR_NOTSUPPORTED"])
-
-            # key = self.signing_pubkey
-            # TODO: implement signing?
         else:
-            # TODO: not in the original applet
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
         if p2 != Reference.GET_PUBLIC_KEY_REFERENCE.value:
@@ -176,8 +153,6 @@ class MeesignSAM(SAM):
 
         elif p1 == 0x02:
             raise SwError(SW["ERR_NOTSUPPORTED"])
-
-            self.mf.signing_cert += data
         else:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
@@ -189,9 +164,6 @@ class MeesignSAM(SAM):
             return SW["NORMAL"], self.mf.auth_cert
         elif p1 == 0x02:
             raise SwError(SW["ERR_NOTSUPPORTED"])
-
-            # TODO: implement signing?
-            return SW["NORMAL"], self.mf.signing_cert
         else:
             raise SwError(SW["ERR_INCORRECTP1P2"])
 
@@ -216,7 +188,7 @@ class MeesignSAM(SAM):
             communicator_url)
         task = self.__wait_for_task(task_id, communicator_url)
         if task is None or task.state == Task.TaskState.FAILED:
-            raise SwError(SW["ERR_NOINFO6A"])  # TODO: better error
+            raise SwError(SW["ERR_NOINFO6A"])
 
         self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
         return SW["NORMAL"], task.data
@@ -269,6 +241,8 @@ class MeesignSAM(SAM):
             cert = f.read()
         self.ssl_credentials = grpc.ssl_channel_credentials(cert)
 
+    def set_configuration_provider(self, configuration_provider: ConfigurationProvider):
+        self.configuration_provider = configuration_provider
     def manage_security_environment(
             self, p1: int, p2: int, data: bytes) -> ApduResponse:
         """
@@ -283,7 +257,7 @@ class MeesignSAM(SAM):
         if admin_pin.is_set() and not admin_pin.is_validated():
             raise SwError(SW["ERR_SECSTATUS"])
         pin.set_pin(data)
-        # pin.resetAndUnblock(); TODO
+        # pin.resetAndUnblock();
         admin_pin.reset()
         if not admin_pin.is_set() and p2 == PinType.ADMIN_PIN_REFERENCE.value:
             admin_pin._is_set = True
@@ -340,7 +314,9 @@ class MeesignSAM(SAM):
 class Pin:
     """
     Represents a PIN instance
-    # TODO: WIP, every verification returns True
+    Warning: right now the PIN is not verified, 
+    as it is unclear whether there is reason to do so.
+    In future, this should be removed.
     """
 
     PIN_MAX_SIZE = 12
@@ -489,7 +465,7 @@ class EnvConfigurationProvider(ConfigurationProvider):
         try:
             group_id = bytes.fromhex(group_id)
         except ValueError as error:
-            # TODO: tell the user
+            print("Invalid group id format, not a hex string!")
             raise
         return group_id
 
@@ -542,6 +518,7 @@ class ControllerConfigurationProvider(ConfigurationProvider):
 
         data = response.json()
         try:
+            data["group_id"] = bytes(data["group_id"])
             configuration = InterfaceConfiguration(**data)
         except TypeError as error:
             # got invalid data
