@@ -32,8 +32,7 @@ class MeesignOS(Iso7816OS):
     The virtual card provides an interface between a meesign server and a webeid application.
     """
 
-    # INFINIT_EID_ATR = bytes([0x3b, 0xd5, 0x18, 0xff, 0x81, 0x91, 0xfe, 0x1f, 0xc3, 0x80, 0x73, 0xc8, 0x21, 0x10, 0x0a])
-    INFINIT_EID_ATR = bytes([0x3b, 0xfe, 0x18, 0x00, 0x00, 0x80, 0x31, 0xfe, 0x45, 0x80, 0x31, 0x80, 0x66, 0x40, 0x90, 0xa5, 0x10, 0x2e, 0x10, 0x83, 0x01, 0x90, 0x00, 0xf2])
+    INFINIT_EID_ATR = bytes([0x3b, 0xd5, 0x18, 0xff, 0x81, 0x91, 0xfe, 0x1f, 0xc3, 0x80, 0x73, 0xc8, 0x21, 0x10, 0x0a])
                              
     SELF_PING_TIMER_SECONDS = 30
 
@@ -129,8 +128,8 @@ class MeesignSAM(SAM):
         key = None
         configuration = self.configuration_provider.get_configuration()
         if not configuration:
-            # todo
-            pass
+            print("No configuration found!")
+            raise SwError(SW["ERR_EXECUTION"])
 
         if p1 == Reference.AUTH_KEYPAIR_REFERENCE.value:
             key = configuration.group_id  
@@ -174,15 +173,14 @@ class MeesignSAM(SAM):
         if not self.pins.get(PinType.AUTH_PIN_REFERENCE).is_validated():
             raise SwError(CustomSW.SW_PIN_VERIFICATION_REQUIRED)
 
-        curr_datetime = datetime.now().strftime('%d.%m.%Y, %H:%M:%S')
         configuration = self.configuration_provider.get_configuration()
         self.set_ssl_credentials(configuration.communicator_certificate_path)
         if not configuration:
-            # TODO
-            pass
+            print("No configuration found!")
+            raise SwError(SW["ERR_EXECUTION"])
         communicator_url = f"{configuration.communicator_hostname}:{MEESIGN_PORT}"
         task_id = self.__create_task(
-            f"Nextcloud authentication request from {curr_datetime}",
+            f"PC/SC authentication request using Web eID.",
             configuration.group_id,
             data,
             communicator_url)
