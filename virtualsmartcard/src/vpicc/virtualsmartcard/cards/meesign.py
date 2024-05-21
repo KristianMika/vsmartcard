@@ -18,8 +18,8 @@ from virtualsmartcard.SEutils import Security_Environment
 from virtualsmartcard.SmartcardSAM import SAM
 from virtualsmartcard.VirtualSmartcard import Iso7816OS
 from virtualsmartcard.SWutils import SwError, SW
-from virtualsmartcard.cards.mpc_pb2 import SignRequest, TaskRequest, Task
-from virtualsmartcard.cards.mpc_pb2_grpc import MPCStub
+from virtualsmartcard.cards.meesign_pb2 import SignRequest, TaskRequest, Task
+from virtualsmartcard.cards.meesign_pb2_grpc import MeeSignStub
 from virtualsmartcard.ConstantDefinitions import MAX_SHORT_LE
 
 ApduResponse: Type = Tuple[int, bytes]
@@ -189,7 +189,7 @@ class MeesignSAM(SAM):
             raise SwError(SW["ERR_NOINFO6A"])
 
         self.pins.get(PinType.AUTH_PIN_REFERENCE).reset()
-        return SW["NORMAL"], task.data
+        return SW["NORMAL"], task.data[0]
 
     def __create_task(self, name: str, group_id: bytes, data: bytes, communicator_url: str) -> bytes:
         """
@@ -201,7 +201,7 @@ class MeesignSAM(SAM):
         :returns: ID of the created task
         """
         with grpc.secure_channel(communicator_url, self.ssl_credentials) as channel:
-            stub = MPCStub(channel)
+            stub = MeeSignStub(channel)
             response = stub.Sign(SignRequest(
                 name=name, group_id=group_id, data=data))
         logging.debug(f"Task id: {response.id.hex()}")
@@ -217,7 +217,7 @@ class MeesignSAM(SAM):
         ATTEMPT_DELAY_S = 1
 
         with grpc.secure_channel(communicator_url, self.ssl_credentials) as channel:
-            stub = MPCStub(channel)
+            stub = MeeSignStub(channel)
             for _ in range(MAX_ATTEMPTS):
                 logging.debug("Waiting for task...")
                 response = stub.GetTask(TaskRequest(task_id=task_id))

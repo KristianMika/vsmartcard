@@ -9,6 +9,12 @@ make
 make install
 ```
 
+## Generate grpc bindings
+
+```bash
+python3 -m grpc_tools.protoc -I.  --python_out=out --grpc_python_out=out meesign.proto
+```
+
 ## Meesign Usage
 
 _NOTE:_ You may need to restart pcscd before running vicc
